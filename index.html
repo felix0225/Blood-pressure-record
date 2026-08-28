@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>血壓紀錄</title>
+    
+    <!-- 一般瀏覽器 favicon -->
+    <link rel="icon" type="image/png" href="icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="血壓紀錄">
+    <!-- Apple / iPhone 主畫面圖示 -->
+    <link rel="apple-touch-icon" href="icon.png">
+    <!-- PWA & iOS 設定 -->
+    <link rel="manifest" href="manifest.json">
+    
+    <style>
+        :root {
+            --bg-color: #f2f2f7;
+            --card-bg: #ffffff;
+            --text-main: #1c1c1e;
+            --text-muted: #8e8e93;
+            --primary: #007aff;
+            --danger: #ff3b30;
+            --warning: #ff9500;
+            --normal: #34c759;
+        }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background-color: var(--bg-color); margin: 0; padding: 20px; color: var(--text-main); -webkit-tap-highlight-color: transparent; }
+        
+        h1 { font-size: 24px; text-align: center; margin-bottom: 20px; }
+        
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 5px; font-weight: 500; font-size: 14px; }
+        .input-group input {
+            width: 100%; padding: 12px;
+            border: 1px solid #c7c7cc;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        
+        button {
+            width: 100%; padding: 14px;
+            background-color: var(--primary);
+            color: white; border: none;
+            border-radius: 8px; font-size: 16px;
+            font-weight: 600; cursor: pointer;
+        }
+        button:active { background-color: #0056b3; }
+        
+        .record-list { display: flex; flex-direction: column; gap: 10px; }
+        .record-item {
+            background-color: var(--card-bg);
+            border-radius: 12px; padding: 15px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .record-time { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+        .record-data { font-size: 16px; font-weight: 600; }
+        .record-diff { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
+        
+        /* 新增：紅字警告樣式 */
+        .danger-text {
+            color: var(--danger) !important;
+            font-weight: 800;
+        }
+
+        .delete-btn {
+            background-color: var(--danger);
+            color: white; padding: 6px 12px;
+            border-radius: 6px; font-size: 14px; width: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>血壓紀錄</h1>
+    
+    <div class="card">
+        <form id="bpForm">
+            <div class="input-group">
+                <label>收縮壓 (高壓)</label>
+                <input type="number" id="sys" inputmode="numeric" required placeholder="標準 ≤ 120">
+            </div>
+            <div class="input-group">
+                <label>舒張壓 (低壓)</label>
+                <input type="number" id="dia" inputmode="numeric" required placeholder="標準 ≤ 80">
+            </div>
+            <div class="input-group">
+                <label>心率 (心跳)</label>
+                <input type="number" id="hr" inputmode="numeric" required placeholder="例如：72">
+            </div>
+            <button type="submit">儲存紀錄</button>
+        </form>
+    </div>
+
+    <h2>歷史紀錄</h2>
+    <div class="record-list" id="recordList">
+        <!-- 紀錄會顯示在這裡 -->
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
+
+        const bpForm = document.getElementById('bpForm');
+        const recordList = document.getElementById('recordList');
+        let records = JSON.parse(localStorage.getItem('bpRecords')) || [];
+
+        function renderRecords() {
+            recordList.innerHTML = '';
+            [...records].reverse().forEach((record, index) => {
+                const actualIndex = records.length - 1 - index;
+                
+                // 判斷是否超過標準，若超過則加上 'danger-text' CSS class (紅字粗體)
+                const sysDisplay = record.sys > 120 ? `<span class="danger-text">${record.sys}</span>` : record.sys;
+                const diaDisplay = record.dia > 80 ? `<span class="danger-text">${record.dia}</span>` : record.dia;
+                const diffDisplay = record.diff > 60 ? `<span class="danger-text">${record.diff}</span>` : record.diff;
+
+                const div = document.createElement('div');
+                div.className = 'record-item';
+                div.innerHTML = `
+                    <div>
+                        <div class="record-time">${record.time}</div>
+                        <div class="record-data">血壓: ${sysDisplay} / ${diaDisplay} | 心率: ${record.hr}</div>
+                        <div class="record-diff">血壓差 (脈壓差): ${diffDisplay}</div>
+                    </div>
+                    <button class="delete-btn" onclick="deleteRecord(${actualIndex})">刪除</button>
+                `;
+                recordList.appendChild(div);
+            });
+        }
+
+        bpForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const sys = parseInt(document.getElementById('sys').value);
+            const dia = parseInt(document.getElementById('dia').value);
+            const hr = parseInt(document.getElementById('hr').value);
+            const diff = sys - dia; 
+
+            const now = new Date();
+            const timeString = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+            const newRecord = { sys, dia, hr, diff, time: timeString };
+            records.push(newRecord);
+            localStorage.setItem('bpRecords', JSON.stringify(records));
+            
+            renderRecords();
+            bpForm.reset();
+        });
+
+        window.deleteRecord = (index) => {
+            if(confirm('確定要刪除這筆紀錄嗎？')) {
+                records.splice(index, 1);
+                localStorage.setItem('bpRecords', JSON.stringify(records));
+                renderRecords();
+            }
+        };
+
+        renderRecords();
+    </script>
+</body>
+</html>
