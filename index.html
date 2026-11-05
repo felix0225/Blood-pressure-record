@@ -5,15 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>血壓紀錄</title>
     
-    <!-- 一般瀏覽器 favicon -->
-    <link rel="icon" type="image/png" href="icon.png">
+    <!-- PWA & iOS 設定 -->
+    <link rel="manifest" href="manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="血壓紀錄">
-    <!-- Apple / iPhone 主畫面圖示 -->
     <link rel="apple-touch-icon" href="icon.png">
-    <!-- PWA & iOS 設定 -->
-    <link rel="manifest" href="manifest.json">
     
     <style>
         :root {
@@ -23,14 +20,49 @@
             --text-muted: #8e8e93;
             --primary: #007aff;
             --danger: #ff3b30;
-            --warning: #ff9500;
-            --normal: #34c759;
+            --border-color: #e5e5ea;
         }
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         body { background-color: var(--bg-color); margin: 0; padding: 20px; color: var(--text-main); -webkit-tap-highlight-color: transparent; }
         
-        h1 { font-size: 24px; text-align: center; margin-bottom: 20px; }
+        h1 { font-size: 24px; text-align: center; margin-bottom: 16px; }
+        h2 { font-size: 18px; margin: 0; }
+        .header-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+        .sub-note { font-size: 12px; color: var(--text-muted); }
         
+        /* 統計卡片區塊 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 14px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }
+        .stat-title { font-size: 14px; font-weight: 700; color: var(--primary); }
+        .stat-count { font-size: 11px; color: var(--text-muted); background: var(--bg-color); padding: 2px 6px; border-radius: 10px; }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+        .stat-row:last-child { margin-bottom: 0; }
+        .stat-label { color: var(--text-muted); }
+        .stat-val { font-weight: 600; }
+
         .card {
             background-color: var(--card-bg);
             border-radius: 12px;
@@ -68,7 +100,7 @@
         .record-data { font-size: 16px; font-weight: 600; }
         .record-diff { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
         
-        /* 新增：紅字警告樣式 */
+        /* 紅字警告樣式 */
         .danger-text {
             color: var(--danger) !important;
             font-weight: 800;
@@ -84,6 +116,9 @@
 <body>
 
     <h1>血壓紀錄</h1>
+
+    <!-- 7天與30天平均值統計卡片 -->
+    <div class="stats-grid" id="statsGrid"></div>
     
     <div class="card">
         <form id="bpForm">
@@ -103,10 +138,11 @@
         </form>
     </div>
 
-    <h2>歷史紀錄</h2>
-    <div class="record-list" id="recordList">
-        <!-- 紀錄會顯示在這裡 -->
+    <div class="header-row">
+        <h2>歷史紀錄</h2>
+        <span class="sub-note">自動保留最近 90 天</span>
     </div>
+    <div class="record-list" id="recordList"></div>
 
     <script>
         if ('serviceWorker' in navigator) {
@@ -115,14 +151,100 @@
 
         const bpForm = document.getElementById('bpForm');
         const recordList = document.getElementById('recordList');
+        const statsGrid = document.getElementById('statsGrid');
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const RETENTION_MS = 90 * DAY_MS;
         let records = JSON.parse(localStorage.getItem('bpRecords')) || [];
 
+        // 取得單筆紀錄的時間戳記
+        function getRecordTime(record) {
+            return record.timestamp || new Date(record.time).getTime();
+        }
+
+        // 清理超過 90 天的舊紀錄
+        function cleanOldRecords() {
+            const now = Date.now();
+            const initialLength = records.length;
+
+            records = records.filter(record => {
+                const recordTime = getRecordTime(record);
+                return !isNaN(recordTime) && (now - recordTime <= RETENTION_MS);
+            });
+
+            if (records.length !== initialLength) {
+                localStorage.setItem('bpRecords', JSON.stringify(records));
+            }
+        }
+
+        // 計算指定天數內的平均值
+        function getStatsForDays(days) {
+            const now = Date.now();
+            const cutoff = days * DAY_MS;
+            const filtered = records.filter(r => (now - getRecordTime(r)) <= cutoff);
+            const count = filtered.length;
+
+            if (count === 0) {
+                return { count: 0, sys: '--', dia: '--', diff: '--', hr: '--' };
+            }
+
+            const sum = filtered.reduce((acc, r) => ({
+                sys: acc.sys + r.sys,
+                dia: acc.dia + r.dia,
+                diff: acc.diff + r.diff,
+                hr: acc.hr + r.hr
+            }), { sys: 0, dia: 0, diff: 0, hr: 0 });
+
+            return {
+                count,
+                sys: Math.round(sum.sys / count),
+                dia: Math.round(sum.dia / count),
+                diff: Math.round(sum.diff / count),
+                hr: Math.round(sum.hr / count)
+            };
+        }
+
+        // 產生統計卡片 HTML
+        function createStatCardHTML(title, stats) {
+            const sysHtml = (stats.sys !== '--' && stats.sys > 120) ? `<span class="danger-text">${stats.sys}</span>` : stats.sys;
+            const diaHtml = (stats.dia !== '--' && stats.dia > 80) ? `<span class="danger-text">${stats.dia}</span>` : stats.dia;
+            const diffHtml = (stats.diff !== '--' && stats.diff > 60) ? `<span class="danger-text">${stats.diff}</span>` : stats.diff;
+
+            return `
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <span class="stat-title">${title}</span>
+                        <span class="stat-count">${stats.count} 筆</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">收縮 / 舒張</span>
+                        <span class="stat-val">${sysHtml} / ${diaHtml}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">平均血壓差</span>
+                        <span class="stat-val">${diffHtml}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">平均心率</span>
+                        <span class="stat-val">${stats.hr}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 渲染統計卡片與歷史列表
         function renderRecords() {
+            cleanOldRecords();
+
+            // 更新上方 7 天與 30 天統計卡片
+            const stats7 = getStatsForDays(7);
+            const stats30 = getStatsForDays(30);
+            statsGrid.innerHTML = createStatCardHTML('最近 7 天平均', stats7) + createStatCardHTML('最近 30 天平均', stats30);
+
+            // 更新下方歷史紀錄列表
             recordList.innerHTML = '';
             [...records].reverse().forEach((record, index) => {
                 const actualIndex = records.length - 1 - index;
                 
-                // 判斷是否超過標準，若超過則加上 'danger-text' CSS class (紅字粗體)
                 const sysDisplay = record.sys > 120 ? `<span class="danger-text">${record.sys}</span>` : record.sys;
                 const diaDisplay = record.dia > 80 ? `<span class="danger-text">${record.dia}</span>` : record.dia;
                 const diffDisplay = record.diff > 60 ? `<span class="danger-text">${record.diff}</span>` : record.diff;
@@ -132,8 +254,8 @@
                 div.innerHTML = `
                     <div>
                         <div class="record-time">${record.time}</div>
-                        <div class="record-data">收縮壓: ${sysDisplay} ，舒張壓: ${diaDisplay} ，心率: ${record.hr}</div>
-                        <div class="record-diff">血壓差 (脈壓): ${diffDisplay}</div>
+                        <div class="record-data">血壓: ${sysDisplay} / ${diaDisplay} | 心率: ${record.hr}</div>
+                        <div class="record-diff">血壓差 (脈壓差): ${diffDisplay}</div>
                     </div>
                     <button class="delete-btn" onclick="deleteRecord(${actualIndex})">刪除</button>
                 `;
@@ -151,7 +273,14 @@
             const now = new Date();
             const timeString = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-            const newRecord = { sys, dia, hr, diff, time: timeString };
+            const newRecord = { 
+                sys, 
+                dia, 
+                hr, 
+                diff, 
+                time: timeString,
+                timestamp: now.getTime()
+            };
             records.push(newRecord);
             localStorage.setItem('bpRecords', JSON.stringify(records));
             
